@@ -87,7 +87,17 @@ async def run() -> None:
     @dp.message()
     async def handle(message: Message) -> None:
         user = message.from_user
+        if message.chat.type in {ChatType.GROUP, ChatType.SUPERGROUP}:
+            logger.info(
+                "RECEIVED group=%s msg=%s user_bot=%s sender_chat=%s has_text=%s has_caption=%s",
+                message.chat.id, message.message_id,
+                user.is_bot if user else None,
+                message.sender_chat is not None,
+                message.text is not None, message.caption is not None,
+            )
         if user is None or user.is_bot:
+            if message.chat.type in {ChatType.GROUP, ChatType.SUPERGROUP}:
+                logger.info("SKIP_NO_HUMAN_SENDER group=%s msg=%s", message.chat.id, message.message_id)
             return
 
         is_private = message.chat.type == ChatType.PRIVATE
@@ -230,13 +240,18 @@ async def run() -> None:
             return
 
         if route is None or not route.enabled:
+            logger.info("SKIP_NO_ACTIVE_ROUTE group=%s msg=%s", message.chat.id, message.message_id)
             return
         if message.sender_chat is not None:
+            logger.info("SKIP_ANONYMOUS group=%s msg=%s", message.chat.id, message.message_id)
             return
         if not eligible_content(message.text, message.caption, compile_hashtags(",".join(route.tags))):
+            logger.info("SKIP_HASHTAG group=%s msg=%s", message.chat.id, message.message_id)
             return
         if not await admin_of(bot, message.chat.id, user.id):
+            logger.info("SKIP_NOT_ADMIN group=%s msg=%s", message.chat.id, message.message_id)
             return
+        logger.info("PUBLISH_ATTEMPT group=%s msg=%s target=%s", message.chat.id, message.message_id, route.target_id)
         try:
             await bot.copy_message(
                 chat_id=route.target_id,
