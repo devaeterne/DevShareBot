@@ -53,12 +53,14 @@ Re-run `/setup` to re-enable a disabled route or change the destination channel.
 
 ## Security model
 
+- Anonymous group-admin messages are accepted only if Telegram attributes the sender to the exact source group. The actual human cannot be identified or verified.
+
 - Chat picker selections are **not authorization**. Actual Telegram admin memberships are checked independently.
 - Bot must be an admin in the source group; destination channel must grant it message-posting rights.
 - Current user must be an admin in both chats to finish setup.
 - Publishing requires the sender's current source-group admin status. API errors fail closed.
-- Anonymous admins, messages sent on behalf of chats, and bot accounts are excluded.
-- Configuration is per group; only administrators in that group can change it.
+- Anonymous admins posting as the source group are supported; their human identity cannot be verified. Posts as other chats/channels and ordinary bot accounts are excluded.
+- Configuration is per group; only identifiable administrators in that group can change it. Anonymous group posts cannot issue management commands.
 - A person who is an admin in both a group and channel can configure routing between them; review who you grant admin privileges to.
 - Do not commit the token. The `.env` file is ignored by Git.
 
