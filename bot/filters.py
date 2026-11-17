@@ -1,16 +1,20 @@
-"""Pure helpers for safely deciding whether a message is eligible."""
+"""Pure helpers for hashtag configuration and matching."""
 
 import re
 
 
-def compile_hashtags(raw: str) -> re.Pattern[str]:
-    """Build a case-insensitive hashtag expression from comma-separated names."""
+def normalize_tags(raw: str) -> list[str]:
     tags = [part.strip().lstrip("#") for part in raw.split(",")]
     tags = [tag for tag in tags if tag]
-    if not tags:
-        raise ValueError("HASHTAGS must contain at least one tag")
-    if any(not re.fullmatch(r"\w+", tag, flags=re.UNICODE) for tag in tags):
-        raise ValueError("HASHTAGS may only contain letters, numbers, and underscores")
+    if not 1 <= len(tags) <= 20:
+        raise ValueError("1-20 hashtag girin (virgülle ayırın).")
+    if any(len(tag) > 32 or not re.fullmatch(r"\w+", tag, re.UNICODE) for tag in tags):
+        raise ValueError("Hashtag yalnızca harf, rakam ve alt çizgi içerebilir (en fazla 32 karakter).")
+    return list(dict.fromkeys(tag.casefold() for tag in tags))
+
+
+def compile_hashtags(raw: str) -> re.Pattern[str]:
+    tags = normalize_tags(raw)
     return re.compile(
         r"(?<!\w)#(?:" + "|".join(re.escape(tag) for tag in tags) + r")(?!\w)",
         re.IGNORECASE,
