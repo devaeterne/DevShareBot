@@ -1,59 +1,86 @@
-# Telegram Hashtag Relay
+# TelegramBot — Multi-group Hashtag Relay
 
-A lightweight Telegram group-to-channel relay. Only messages from group **owners** or **administrators** containing approved hashtags are copied to the configured channel. Messages from regular members never pass.
+Public, self-hostable Telegram bot that relays messages from **group owners or administrators** to their chosen Telegram channels if an approved hashtag appears.
 
-## Rules
-- One configured source group and one destination channel.
-- Configurable case-insensitive hashtags, e.g. `#Analiz`, `#Kar`, `#Proje`.
-- Telegram API role verification for each qualifying message (fail closed).
-- Reject anonymous-admin / sender-chat and bot messages.
-- Copy messages without a forwarded-from header. Supports text and individual media messages with hashtags in captions.
-- Does not relay messages posted before startup. Albums may be split into individual channel posts.
+## Features
 
-## Configuration
+- Different Telegram groups can independently configure different target channels and hashtags.
+- Fully in-Telegram group/channel selection; no chat IDs required.
+- Source admins only can configure or modify routes.
+- Messages from regular group members are ignored.
+- Source group and destination channel rights verified with Telegram before settings are saved.
+- SQLite persistence across container restarts.
+- Long polling, no public HTTP ports required.
+- Text messages and single media messages with hashtags in captions can be copied.
 
-Copy `.env.example` to `.env` on the **server**, and set real values there. Never commit credentials.
+## Quick start (Ubuntu + Docker)
 
 ```bash
+git clone https://github.com/devaeterne/TelegramBot.git
+cd TelegramBot
 cp .env.example .env
-nano .env
+nano .env          # set BOT_TOKEN
 docker compose up -d --build
 docker compose logs -f --tail=50
 ```
 
-Grant the bot administrator status in the source group (for reliable role checks and message visibility). In the destination channel, grant the bot permission to post messages. Use the numeric group/channel IDs (usually start with `-100`).
+The `telegram_relay_data` Docker volume holds the SQLite database. **Do not delete the volume when updating**.
 
-## Deploy from private GitHub repository
+## Setup from Telegram
 
-Provision an SSH deploy key with **read-only** repository access on the Ubuntu server. Then:
+1. Add the bot as an **administrator** in your Telegram group.
+2. Add the bot as an **administrator** in your target channel with **Post Messages** rights.
+3. Open a **private chat** with the bot and send `/setup`.
+4. Use the Telegram chat picker to choose the **source group**.
+5. Use the Telegram chat picker to choose the **destination channel**.
+6. Send a comma-separated hashtag list, e.g. `Analiz,Kar,Proje`.
+7. Send `#Analiz` in the group as an administrator to test delivery. Regular members' messages will not be delivered.
 
-```bash
-git clone git@github.com:devaeterne/TelegramBot.git
-cd TelegramBot
-cp .env.example .env
-nano .env
-docker compose config --quiet
-docker compose up -d --build
-docker compose ps
-```
+Each group may configure its own route and list, independently of other groups.
 
-Update:
+### Commands
 
-```bash
-git pull --ff-only origin main
-docker compose up -d --build
-```
+| Where | Command | Description |
+|---|---|---|
+| Private chat | `/start` | Instructions |
+| Private chat | `/setup` | Create/update group→channel route |
+| Private chat | `/cancel` | Cancel pending setup |
+| Source group | `/status` | Show current route (admin only) |
+| Source group | `/hashtags Analiz,Kar,Proje` | Replace allowed hashtags (admin only) |
+| Source group | `/disable` | Pause relay (admin only) |
 
-## Local test
+Re-run `/setup` to re-enable a disabled route or change the destination channel.
+
+## Security model
+
+- Chat picker selections are **not authorization**. Actual Telegram admin memberships are checked independently.
+- Bot must be an admin in the source group; destination channel must grant it message-posting rights.
+- Current user must be an admin in both chats to finish setup.
+- Publishing requires the sender's current source-group admin status. API errors fail closed.
+- Anonymous admins, messages sent on behalf of chats, and bot accounts are excluded.
+- Configuration is per group; only administrators in that group can change it.
+- A person who is an admin in both a group and channel can configure routing between them; review who you grant admin privileges to.
+- Do not commit the token. The `.env` file is ignored by Git.
+
+## Development
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-## Operational notes
+Install Python dependencies to run the actual bot: `pip install -r requirements.txt`.
 
-- Uses polling; no inbound port or reverse proxy required.
-- Run **one** polling instance per bot token.
-- Role is checked at processing time, not message creation time.
-- Telegram may prohibit copying protected content or service messages. Failures are logged.
-- No persistent storage in v1; retries after downtime or delivery auditing are outside current scope.
+## Limitations (v2)
+
+- One destination per source group. Multiple groups can share one channel.
+- Album entries arrive separately and may be copied as separate posts.
+- Existing/historical messages are not replayed. Edited messages are not synchronized.
+- Setup state is held in memory during the picker workflow (start `/setup` again after a restart).
+- sqlite is designed for **one polling process** and a modest bot workload.
+- Telegram may refuse to copy protected or unsupported messages; failures are logged.
+- Role checks reflect current role at processing time, not necessarily at posting time.
+- No web panel, billing, advanced moderation, or delivery/retry ledger in v2.
+
+## License
+
+No license has been granted yet. Public GitHub visibility alone does not grant reuse, modification or redistribution rights. Add an explicit open-source license if you intend others to deploy or extend the bot.
