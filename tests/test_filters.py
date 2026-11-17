@@ -11,6 +11,16 @@ class HashtagFilterTests(unittest.TestCase):
         self.assertTrue(eligible_content("Yeni #analiz", None, self.pattern))
         self.assertTrue(eligible_content(None, "Bir #Proje", self.pattern))
 
+    def test_turkish_dotted_i(self):
+        tags = normalize_tags("#ANALİZ, #KAR, #PROJE")
+        self.assertEqual(tags, ["analiz", "kar", "proje"])
+        pattern = compile_hashtags(",".join(tags))
+        self.assertTrue(eligible_content("#ANALİZ", None, pattern))
+        self.assertTrue(eligible_content("#analiz", None, pattern))
+        # Existing SQLite rows may have stored a decomposed capital-İ.
+        old_saved = "anali\u0307z,kar,proje"
+        self.assertTrue(eligible_content("#ANALİZ", None, compile_hashtags(old_saved)))
+
     def test_does_not_match_longer_hashtags(self):
         self.assertFalse(eligible_content("#Karar", None, self.pattern))
         self.assertFalse(eligible_content("#Proje2026", None, self.pattern))
