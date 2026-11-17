@@ -6,5 +6,10 @@ services:
     init: true
     env_file:
       - .env
+    volumes:
+      - telegram_relay_data:/data
     security_opt:
       - no-new-privileges:true
+
+volumes:
+  telegram_relay_data:
