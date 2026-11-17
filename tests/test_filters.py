@@ -1,6 +1,6 @@
 import unittest
 
-from bot.filters import compile_hashtags, eligible_content
+from bot.filters import compile_hashtags, eligible_content, normalize_tags
 
 
 class HashtagFilterTests(unittest.TestCase):
@@ -27,6 +27,9 @@ class HashtagFilterTests(unittest.TestCase):
     def test_hashtag_boundaries(self):
         self.assertFalse(eligible_content("abc#Kar", None, self.pattern))
         self.assertTrue(eligible_content("(#Kar)", None, self.pattern))
+
+    def test_normalization_deduplicates(self):
+        self.assertEqual(normalize_tags("#ANALIZ,analiz,Kar"), ["analiz", "kar"])
 
 
 if __name__ == "__main__":
