@@ -18,6 +18,7 @@ from aiogram.types import (
 )
 
 from bot.filters import compile_hashtags, eligible_content, normalize_tags
+from bot.sender_policy import is_anonymous_group_post
 from bot.storage import RouteStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -95,7 +96,8 @@ async def run() -> None:
                 message.sender_chat is not None,
                 message.text is not None, message.caption is not None,
             )
-        if user is None or user.is_bot:
+        anonymous_group_post = is_anonymous_group_post(message)
+        if (user is None or user.is_bot) and not anonymous_group_post:
             if message.chat.type in {ChatType.GROUP, ChatType.SUPERGROUP}:
                 logger.info("SKIP_NO_HUMAN_SENDER group=%s msg=%s", message.chat.id, message.message_id)
             return
@@ -206,7 +208,7 @@ async def run() -> None:
 
         route = store.get(message.chat.id)
         if command in {"/status", "/hashtags", "/disable"}:
-            if message.sender_chat is not None or not await admin_of(bot, message.chat.id, user.id):
+            if anonymous_group_post or message.sender_chat is not None or user is None or not await admin_of(bot, message.chat.id, user.id):
                 await message.answer("Bu komut yalnızca grup yöneticileri içindir.")
                 return
             if command == "/status":
@@ -242,13 +244,17 @@ async def run() -> None:
         if route is None or not route.enabled:
             logger.info("SKIP_NO_ACTIVE_ROUTE group=%s msg=%s", message.chat.id, message.message_id)
             return
-        if message.sender_chat is not None:
-            logger.info("SKIP_ANONYMOUS group=%s msg=%s", message.chat.id, message.message_id)
+        if message.sender_chat is not None and not anonymous_group_post:
+            logger.info("SKIP_OTHER_CHAT_SENDER group=%s msg=%s", message.chat.id, message.message_id)
             return
         if not eligible_content(message.text, message.caption, compile_hashtags(",".join(route.tags))):
             logger.info("SKIP_HASHTAG group=%s msg=%s", message.chat.id, message.message_id)
             return
-        if not await admin_of(bot, message.chat.id, user.id):
+        if anonymous_group_post:
+            # Telegram hides the real user ID for anonymous admins. Only trust
+            # messages attributed to the exact same group (not a linked channel).
+            logger.info("ANONYMOUS_GROUP_POST_ALLOWED group=%s msg=%s", message.chat.id, message.message_id)
+        elif user is None or not await admin_of(bot, message.chat.id, user.id):
             logger.info("SKIP_NOT_ADMIN group=%s msg=%s", message.chat.id, message.message_id)
             return
         logger.info("PUBLISH_ATTEMPT group=%s msg=%s target=%s", message.chat.id, message.message_id, route.target_id)
