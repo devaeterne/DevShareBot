@@ -27,6 +27,36 @@ class RouteStoreTests(unittest.TestCase):
             self.assertTrue(store.get(-1001).enabled)
             store.close()
 
+    def test_request_routes_are_independent_and_persistent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "db.sqlite3")
+            store = RouteStore(path)
+            store.save(-1001, -1002, ["analiz"], 42)
+            self.assertIsNone(store.get_request(-1001))
+            store.save_request(-1001, -1003, 42)
+            store.save_request(-1004, -1005, 90)
+            self.assertEqual(store.get_request(-1001).target_id, -1003)
+            self.assertEqual(store.get(-1001).target_id, -1002)
+            store.disable_request(-1001, 42)
+            self.assertFalse(store.get_request(-1001).enabled)
+            self.assertTrue(store.get_request(-1004).enabled)
+            store.close()
+
+            store = RouteStore(path)
+            self.assertEqual(store.get_request(-1001).target_id, -1003)
+            self.assertFalse(store.get_request(-1001).enabled)
+            store.save_request(-1001, -1006, 42)
+            self.assertTrue(store.get_request(-1001).enabled)
+            self.assertEqual(store.get(-1001).target_id, -1002)
+            store.close()
+
+    def test_request_same_source_destination_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = RouteStore(str(Path(directory) / "db.sqlite3"))
+            with self.assertRaises(ValueError):
+                store.save_request(-1001, -1001, 42)
+            store.close()
+
 
 if __name__ == "__main__":
     unittest.main()
