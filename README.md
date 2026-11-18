@@ -46,13 +46,26 @@ A separate workflow supports requests from **all human group members**, independ
 2. A Telegram account that is admin in **both groups** opens the bot's private chat and sends `/setuptalep`.
 3. Choose the source group and then a **different** destination group.
 4. Any source group member can send `#Talep XAUUSD` or `#Talep BTC` at the **beginning** of a text message.
-5. The bot copies the original message into the request group. Only after successful copying, it replies to the original message: `✅ Talebiniz alınmıştır.`
+5. The bot applies per-user daily limits and optional open hours, then copies the original message into the request group. Only after successful copying, it replies: `✅ Talebiniz alınmıştır.`
 
-`#Talep` with no details receives a usage hint and is not delivered. Regular members cannot change destinations. Source and destination must be different groups. Bot-generated messages, messages sent on behalf of other chats, and channel discussion echoes are excluded; anonymous posts attributed to the source group are supported. For security, setup validates both groups' admins using Telegram.
+By default a route is **open all day**, with a limit of **1 successfully delivered request per human user, per source group, per calendar day** (Europe/Istanbul timezone). Request quotas are kept in SQLite and cannot be bypassed by changing Telegram usernames. A failed Telegram copy releases the user's reservation; duplicate and concurrent requests are protected by an atomic SQLite claim. Anonymous posts cannot receive identity-based quotas and are rejected for requests, while anonymous group-admin publishing still works for regular hashtags.
+
+Administrators in the source group can control request intake:
+
+- `/talep açık` — enable requests
+- `/talep kapalı` — disable requests; users cannot submit while closed
+- `/taleplimit 1` — one request per day (choose 1–20)
+- `/talepsaat 09:00-18:00` — restrict intake to Turkish local time
+- `/talepsaat kapalı` — clear the time restriction; requests may arrive all day while the route is enabled
+- `/talepstatus` — show active state, limit, and hours
+
+Times use a half-open interval: 09:00 included, 18:00 excluded. Overnight intervals (e.g. `22:00-02:00`) are supported. The daily quota resets at midnight in **Europe/Istanbul**. Switching the route off/on does **not** reset usage.
+
+`#Talep` with no details receives a usage hint and is not delivered. Regular members cannot change destinations. Source and destination must be different groups. Bot-generated messages, messages sent on behalf of other chats, and channel discussion echoes are excluded; for requests, anonymous group-admin posts are also excluded because no per-user identity is available. For security, setup validates both groups' admins using Telegram.
 
 Each source group has one independent request target, separate from its existing publication channel. The request destination is not required to be a public channel; it is a Telegram group. The destination receives a message copy (no reliable original author attribution from `copyMessage`); avoid placing sensitive data in public request groups.
 
-Request copying is best-effort (no retry queue/deduplication in this version). The confirmation is sent only when Telegram reports copying succeeded, though the reply itself may fail if the bot lacks send permissions.
+Request copying is best-effort (no durable retry queue). The delivery ledger guards duplicate processing in normal operation; if the process crashes after Telegram accepted a copy but before marking it delivered, the next startup releases orphaned reservations and that edge case can duplicate a request on later replay. The confirmation is sent only when Telegram reports copying succeeded, though the reply itself may fail if the bot lacks send permissions.
 
 ### Commands
 
@@ -65,8 +78,12 @@ Request copying is best-effort (no retry queue/deduplication in this version). T
 | Source group | `/status` | Show current route (admin only) |
 | Source group | `/hashtags Analiz,Kar,Proje` | Replace allowed hashtags (admin only) |
 | Source group | `/disable` | Pause relay (admin only) |
-| Source group | `/talepstatus` | Show request destination (admin only) |
-| Source group | `/talepkapat` | Disable requests (admin only) |
+| Source group | `/talepstatus` | Show request destination, quota and hours (admin only) |
+| Source group | `/talep açık` / `/talep kapalı` | Enable or disable request intake (admin only) |
+| Source group | `/taleplimit 1` | Set requests allowed per user/day (admin only) |
+| Source group | `/talepsaat 09:00-18:00` | Restrict requests to specified Türkiye hours (admin only) |
+| Source group | `/talepsaat kapalı` | Remove the hours restriction (admin only) |
+| Source group | `/talepkapat` | Legacy alias for `/talep kapalı` |
 
 Re-run `/setup` to re-enable a disabled route or change the destination channel.
 
