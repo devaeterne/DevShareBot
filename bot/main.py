@@ -20,6 +20,7 @@ from aiogram.types import (
 from bot.filters import compile_hashtags, eligible_content, normalize_tags
 from bot.sender_policy import is_anonymous_group_post
 from bot.requests import parse_request
+from bot.request_schedule import now_local, in_window, parse_hours, describe_hours
 from bot.storage import RouteStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -115,7 +116,8 @@ async def run() -> None:
                     "/setup — grup, kanal ve hashtag seç\n"
                     "/setuptalep — kaynak grup ve hedef talep grubu seç\n"
                     "/cancel — kurulumu iptal et\n"
-                    "Grup komutları: /hashtags, /status, /disable, /talepstatus, /talepkapat.\n"
+                    "Grup komutları: /hashtags /status /disable /talep açık /talep kapalı\n"
+                    "/taleplimit 1 /talepsaat 09:00-18:00 /talepstatus.\n"
                     "Botu kaynak gruba ve hedef kanala yönetici olarak ekleyin."
                 )
                 return
@@ -245,7 +247,7 @@ async def run() -> None:
 
         route = store.get(message.chat.id)
         request_route = store.get_request(message.chat.id)
-        if command in {"/status", "/hashtags", "/disable", "/talepstatus", "/talepkapat"}:
+        if command in {"/status", "/hashtags", "/disable", "/talepstatus", "/talepkapat", "/talep", "/taleplimit", "/talepsaat"}:
             if anonymous_group_post or message.sender_chat is not None or user is None or not await admin_of(bot, message.chat.id, user.id):
                 await message.answer("Bu komut yalnızca grup yöneticileri içindir.")
                 return
@@ -253,16 +255,55 @@ async def run() -> None:
                 await message.answer(
                     "Talep yönlendirmesi tanımlı değil. Özel sohbetten /setuptalep kullanın."
                     if request_route is None
-                    else f"Talep yönlendirmesi: {'Aktif' if request_route.enabled else 'Kapalı'}\n"
-                         f"Hedef grup: {request_route.target_id}"
+                    else f"Talep: {'Açık' if request_route.enabled else 'Kapalı'}\n"
+                         f"Hedef grup: {request_route.target_id}\n"
+                         f"Günlük kişi limiti: {request_route.daily_limit}\n"
+                         f"Talep saatleri (Türkiye): {describe_hours(request_route.start_minute, request_route.end_minute)}"
                 )
                 return
+            if command in {"/talep", "/taleplimit", "/talepsaat"}:
+                if request_route is None:
+                    await message.answer("Önce özel sohbetten /setuptalep ile hedef grubu seçin.")
+                    return
+                arg = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) == 2 else ""
+                if command == "/talep":
+                    if arg.casefold() in {"açık", "acik"}:
+                        store.set_request_enabled(message.chat.id, True, user.id)
+                        await message.answer("✅ Talep alımı açıldı.")
+                    elif arg.casefold() in {"kapalı", "kapali"}:
+                        store.set_request_enabled(message.chat.id, False, user.id)
+                        await message.answer("⏸ Talep alımı kapatıldı.")
+                    else:
+                        await message.answer("Kullanım: /talep açık veya /talep kapalı")
+                    return
+                if command == "/taleplimit":
+                    try:
+                        if not arg.isascii() or not arg.isdecimal():
+                            raise ValueError()
+                        limit = int(arg)
+                        store.set_request_limit(message.chat.id, limit, user.id)
+                    except ValueError:
+                        await message.answer("Kullanım: /taleplimit 1 (1-20)")
+                        return
+                    await message.answer(f"✅ Kişi başı günlük limit: {limit}")
+                    return
+                if command == "/talepsaat":
+                    try:
+                        start, end = parse_hours(arg)
+                        store.set_request_hours(message.chat.id, start, end, user.id)
+                    except ValueError as exc:
+                        await message.answer(str(exc))
+                        return
+                    await message.answer(
+                        f"✅ Talep saatleri: {describe_hours(start, end)} (Türkiye saati)"
+                    )
+                    return
             if command == "/talepkapat":
                 if request_route is None:
                     await message.answer("Bu grup için talep yönlendirmesi tanımlı değil.")
                 else:
-                    store.disable_request(message.chat.id, user.id)
-                    await message.answer("⏸ Talep yönlendirmesi durduruldu. Yeniden açmak için /setuptalep kullanın.")
+                    store.set_request_enabled(message.chat.id, False, user.id)
+                    await message.answer("⏸ Talep yönlendirmesi durduruldu. Açmak için /talep açık kullanın.")
                 return
             if command == "/status":
                 if route is None:
@@ -298,14 +339,43 @@ async def run() -> None:
         # A request is accepted only after successful delivery to the target group.
         is_request, request_payload = parse_request(message.text)
         if is_request:
-            if message.sender_chat is not None and not anonymous_group_post:
-                logger.info("REQUEST_SKIP_SENDER_CHAT group=%s msg=%s", message.chat.id, message.message_id)
+            # Anonymous group-admin messages do not provide a verifiable user ID,
+            # and therefore cannot consume a per-user daily quota.
+            if message.sender_chat is not None or user is None or user.is_bot:
+                logger.info("REQUEST_SKIP_UNIDENTIFIABLE_SENDER group=%s msg=%s", message.chat.id, message.message_id)
+                await message.reply("Talep için kişisel hesabınızla mesaj gönderin.")
                 return
-            if request_route is None or not request_route.enabled:
+            if request_route is None:
                 logger.info("REQUEST_SKIP_NO_ROUTE group=%s msg=%s", message.chat.id, message.message_id)
+                return
+            if not request_route.enabled:
+                await message.reply("⏸ Talep alımı şu anda kapalı.")
+                return
+            current = now_local()
+            if not in_window(request_route.start_minute, request_route.end_minute, current):
+                await message.reply(
+                    "⏰ Talep saatleri: "
+                    + describe_hours(request_route.start_minute, request_route.end_minute)
+                    + " (Türkiye saati)."
+                )
                 return
             if not request_payload:
                 await message.reply("Talep oluşturmak için örnek: #Talep XAUUSD")
+                return
+            claim = store.claim_request(
+                message.chat.id, user.id, current.date().isoformat(), message.message_id
+            )
+            if claim == "limit":
+                await message.reply(
+                    f"⏳ Günlük {request_route.daily_limit} talep hakkınızı kullandınız. "
+                    "Yarın Türkiye saatiyle 00:00'da yenilenir."
+                )
+                return
+            if claim == "disabled":
+                await message.reply("⏸ Talep alımı şu anda kapalı.")
+                return
+            if claim == "duplicate":
+                logger.info("REQUEST_DUPLICATE group=%s msg=%s", message.chat.id, message.message_id)
                 return
             try:
                 await bot.copy_message(
@@ -313,12 +383,16 @@ async def run() -> None:
                     from_chat_id=message.chat.id,
                     message_id=message.message_id,
                 )
-                logger.info("REQUEST_DELIVERED source=%s target=%s msg=%s",
-                            message.chat.id, request_route.target_id, message.message_id)
             except TelegramAPIError:
+                store.finish_request(message.chat.id, message.message_id, delivered=False)
                 logger.exception("REQUEST_DELIVERY_FAILED group=%s msg=%s", message.chat.id, message.message_id)
-                await message.reply("Talebiniz şu anda iletilemedi. Lütfen daha sonra tekrar deneyin.")
+                await message.reply("Talebiniz şu anda iletilemedi. Günlük hakkınız kullanılmadı.")
                 return
+            store.finish_request(message.chat.id, message.message_id, delivered=True)
+            logger.info(
+                "REQUEST_DELIVERED source=%s target=%s msg=%s",
+                message.chat.id, request_route.target_id, message.message_id
+            )
             try:
                 await message.reply("✅ Talebiniz alınmıştır.")
             except TelegramAPIError:
