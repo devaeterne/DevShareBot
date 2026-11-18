@@ -113,8 +113,9 @@ async def run() -> None:
                 await message.answer(
                     "📌 Hashtag Relay\n"
                     "/setup — grup, kanal ve hashtag seç\n"
+                    "/setuptalep — kaynak grup ve hedef talep grubu seç\n"
                     "/cancel — kurulumu iptal et\n"
-                    "Grup içindeki /hashtags, /status ve /disable komutları da kullanılabilir.\n"
+                    "Grup komutları: /hashtags, /status, /disable, /talepstatus, /talepkapat.\n"
                     "Botu kaynak gruba ve hedef kanala yönetici olarak ekleyin."
                 )
                 return
@@ -191,9 +192,9 @@ async def run() -> None:
                     store.save_request(session.source_id, chosen, user.id)
                     sessions.pop(user.id, None)
                     await message.answer(
-                        f"✅ Talep yönlendirmesi kaydedildi!\\n"
-                        f"Kaynak grup: {session.source_id}\\n"
-                        f"Talep grubu: {chosen}\\n"
+                        f"✅ Talep yönlendirmesi kaydedildi!\n"
+                        f"Kaynak grup: {session.source_id}\n"
+                        f"Talep grubu: {chosen}\n"
                         "Üyeler artık #Talep XAUUSD gibi mesajlar gönderebilir.",
                         reply_markup=ReplyKeyboardRemove(),
                     )
@@ -252,7 +253,7 @@ async def run() -> None:
                 await message.answer(
                     "Talep yönlendirmesi tanımlı değil. Özel sohbetten /setuptalep kullanın."
                     if request_route is None
-                    else f"Talep yönlendirmesi: {'Aktif' if request_route.enabled else 'Kapalı'}\\n"
+                    else f"Talep yönlendirmesi: {'Aktif' if request_route.enabled else 'Kapalı'}\n"
                          f"Hedef grup: {request_route.target_id}"
                 )
                 return
