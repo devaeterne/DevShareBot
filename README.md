@@ -1,4 +1,4 @@
-# TelegramBot — Multi-group Hashtag Relay
+# DevShareBot — Multi-group Hashtag Relay & Request Router
 
 Public, self-hostable Telegram bot that relays messages from **group owners or administrators** to their chosen Telegram channels if an approved hashtag appears.
 
@@ -16,8 +16,8 @@ Public, self-hostable Telegram bot that relays messages from **group owners or a
 ## Quick start (Ubuntu + Docker)
 
 ```bash
-git clone https://github.com/devaeterne/TelegramBot.git
-cd TelegramBot
+git clone https://github.com/devaeterne/DevShareBot.git
+cd DevShareBot
 cp .env.example .env
 nano .env          # set BOT_TOKEN
 docker compose up -d --build
@@ -38,16 +38,35 @@ The `telegram_relay_data` Docker volume holds the SQLite database. **Do not dele
 
 Each group may configure its own route and list, independently of other groups.
 
+## Member requests: group → group
+
+A separate workflow supports requests from **all human group members**, independently from admin-only group → channel publishing.
+
+1. Add the bot as admin in **both** source and destination groups.
+2. A Telegram account that is admin in **both groups** opens the bot's private chat and sends `/setuptalep`.
+3. Choose the source group and then a **different** destination group.
+4. Any source group member can send `#Talep XAUUSD` or `#Talep BTC` at the **beginning** of a text message.
+5. The bot copies the original message into the request group. Only after successful copying, it replies to the original message: `✅ Talebiniz alınmıştır.`
+
+`#Talep` with no details receives a usage hint and is not delivered. Regular members cannot change destinations. Source and destination must be different groups. Bot-generated messages, messages sent on behalf of other chats, and channel discussion echoes are excluded; anonymous posts attributed to the source group are supported. For security, setup validates both groups' admins using Telegram.
+
+Each source group has one independent request target, separate from its existing publication channel. The request destination is not required to be a public channel; it is a Telegram group. The destination receives a message copy (no reliable original author attribution from `copyMessage`); avoid placing sensitive data in public request groups.
+
+Request copying is best-effort (no retry queue/deduplication in this version). The confirmation is sent only when Telegram reports copying succeeded, though the reply itself may fail if the bot lacks send permissions.
+
 ### Commands
 
 | Where | Command | Description |
 |---|---|---|
 | Private chat | `/start` | Instructions |
 | Private chat | `/setup` | Create/update group→channel route |
+| Private chat | `/setuptalep` | Configure group→request-group route |
 | Private chat | `/cancel` | Cancel pending setup |
 | Source group | `/status` | Show current route (admin only) |
 | Source group | `/hashtags Analiz,Kar,Proje` | Replace allowed hashtags (admin only) |
 | Source group | `/disable` | Pause relay (admin only) |
+| Source group | `/talepstatus` | Show request destination (admin only) |
+| Source group | `/talepkapat` | Disable requests (admin only) |
 
 Re-run `/setup` to re-enable a disabled route or change the destination channel.
 
@@ -60,7 +79,7 @@ Re-run `/setup` to re-enable a disabled route or change the destination channel.
 - Current user must be an admin in both chats to finish setup.
 - Publishing requires the sender's current source-group admin status. API errors fail closed.
 - Anonymous admins posting as the source group are supported; their human identity cannot be verified. Posts as other chats/channels and ordinary bot accounts are excluded.
-- Configuration is per group; only identifiable administrators in that group can change it. Anonymous group posts cannot issue management commands.
+- Configuration is per group; only identifiable administrators in that group can change it. Request setup additionally requires admin rights in the destination group. Anonymous group posts cannot issue management commands.
 - A person who is an admin in both a group and channel can configure routing between them; review who you grant admin privileges to.
 - Do not commit the token. The `.env` file is ignored by Git.
 
