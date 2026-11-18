@@ -19,6 +19,7 @@ from aiogram.types import (
 
 from bot.filters import compile_hashtags, eligible_content, normalize_tags
 from bot.sender_policy import is_anonymous_group_post
+from bot.requests import parse_request
 from bot.storage import RouteStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -32,6 +33,7 @@ class Setup:
     request_id: int
     source_id: int | None = None
     target_id: int | None = None
+    kind: str = "publish"
 
 
 def picker(request_id: int, channel: bool) -> ReplyKeyboardMarkup:
@@ -120,11 +122,13 @@ async def run() -> None:
                 sessions.pop(user.id, None)
                 await message.answer("Kurulum iptal edildi.", reply_markup=ReplyKeyboardRemove())
                 return
-            if command == "/setup":
+            if command in {"/setup", "/setuptalep"}:
                 req = secrets.randbelow(2**31 - 1) + 1
-                sessions[user.id] = Setup(stage="group", request_id=req)
+                kind = "request" if command == "/setuptalep" else "publish"
+                sessions[user.id] = Setup(stage="group", request_id=req, kind=kind)
                 await message.answer(
-                    "Önce kaynak grubu seçin. Seçtiğiniz grupta yönetici olmalısınız.",
+                    "Talep gönderecek kaynak grubu seçin." if kind == "request"
+                    else "Önce kaynak grubu seçin. Seçtiğiniz grupta yönetici olmalısınız.",
                     reply_markup=picker(req, channel=False),
                 )
                 return
@@ -155,11 +159,43 @@ async def run() -> None:
                         await message.answer("Botu kaynak gruba yönetici olarak ekleyip tekrar seçin.")
                         return
                     session.source_id = chosen
-                    session.stage = "channel"
+                    session.stage = "request_target" if session.kind == "request" else "channel"
                     session.request_id = secrets.randbelow(2**31 - 1) + 1
                     await message.answer(
-                        "Şimdi hedef kanalı seçin. Kanalda yönetici olmalı, botun da gönderi paylaşma izni olmalı.",
-                        reply_markup=picker(session.request_id, channel=True),
+                        "Taleplerin ulaşacağı ikinci grubu seçin. Bot her iki grupta da yönetici olmalı."
+                        if session.kind == "request"
+                        else "Şimdi hedef kanalı seçin. Kanalda yönetici olmalı, botun da gönderi paylaşma izni olmalı.",
+                        reply_markup=picker(session.request_id, channel=session.kind != "request"),
+                    )
+                    return
+
+                if session.stage == "request_target":
+                    if chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+                        await message.answer("Talep hedefi bir grup veya süpergrup olmalıdır.")
+                        return
+                    if chosen == session.source_id:
+                        await message.answer("Kaynak ve hedef gruplar farklı olmalıdır.")
+                        return
+                    if not await admin_of(bot, chosen, me.id):
+                        await message.answer("Botu hedef gruba yönetici olarak ekleyin.")
+                        return
+                    if session.source_id is None or not (
+                        await admin_of(bot, session.source_id, user.id)
+                        and await admin_of(bot, session.source_id, me.id)
+                        and await admin_of(bot, chosen, user.id)
+                        and await admin_of(bot, chosen, me.id)
+                    ):
+                        await message.answer("Grup yönetici yetkileri yeniden doğrulanamadı. /setuptalep ile tekrar deneyin.")
+                        sessions.pop(user.id, None)
+                        return
+                    store.save_request(session.source_id, chosen, user.id)
+                    sessions.pop(user.id, None)
+                    await message.answer(
+                        f"✅ Talep yönlendirmesi kaydedildi!\\n"
+                        f"Kaynak grup: {session.source_id}\\n"
+                        f"Talep grubu: {chosen}\\n"
+                        "Üyeler artık #Talep XAUUSD gibi mesajlar gönderebilir.",
+                        reply_markup=ReplyKeyboardRemove(),
                     )
                     return
 
@@ -207,9 +243,25 @@ async def run() -> None:
             return
 
         route = store.get(message.chat.id)
-        if command in {"/status", "/hashtags", "/disable"}:
+        request_route = store.get_request(message.chat.id)
+        if command in {"/status", "/hashtags", "/disable", "/talepstatus", "/talepkapat"}:
             if anonymous_group_post or message.sender_chat is not None or user is None or not await admin_of(bot, message.chat.id, user.id):
                 await message.answer("Bu komut yalnızca grup yöneticileri içindir.")
+                return
+            if command == "/talepstatus":
+                await message.answer(
+                    "Talep yönlendirmesi tanımlı değil. Özel sohbetten /setuptalep kullanın."
+                    if request_route is None
+                    else f"Talep yönlendirmesi: {'Aktif' if request_route.enabled else 'Kapalı'}\\n"
+                         f"Hedef grup: {request_route.target_id}"
+                )
+                return
+            if command == "/talepkapat":
+                if request_route is None:
+                    await message.answer("Bu grup için talep yönlendirmesi tanımlı değil.")
+                else:
+                    store.disable_request(message.chat.id, user.id)
+                    await message.answer("⏸ Talep yönlendirmesi durduruldu. Yeniden açmak için /setuptalep kullanın.")
                 return
             if command == "/status":
                 if route is None:
@@ -239,6 +291,37 @@ async def run() -> None:
                 return
             store.set_tags(message.chat.id, tags, user.id)
             await message.answer("✅ Hashtag'ler güncellendi: " + ", ".join("#" + t for t in tags))
+            return
+
+        # Requests are handled independently of owner/admin channel publishing.
+        # A request is accepted only after successful delivery to the target group.
+        is_request, request_payload = parse_request(message.text)
+        if is_request:
+            if message.sender_chat is not None and not anonymous_group_post:
+                logger.info("REQUEST_SKIP_SENDER_CHAT group=%s msg=%s", message.chat.id, message.message_id)
+                return
+            if request_route is None or not request_route.enabled:
+                logger.info("REQUEST_SKIP_NO_ROUTE group=%s msg=%s", message.chat.id, message.message_id)
+                return
+            if not request_payload:
+                await message.reply("Talep oluşturmak için örnek: #Talep XAUUSD")
+                return
+            try:
+                await bot.copy_message(
+                    chat_id=request_route.target_id,
+                    from_chat_id=message.chat.id,
+                    message_id=message.message_id,
+                )
+                logger.info("REQUEST_DELIVERED source=%s target=%s msg=%s",
+                            message.chat.id, request_route.target_id, message.message_id)
+            except TelegramAPIError:
+                logger.exception("REQUEST_DELIVERY_FAILED group=%s msg=%s", message.chat.id, message.message_id)
+                await message.reply("Talebiniz şu anda iletilemedi. Lütfen daha sonra tekrar deneyin.")
+                return
+            try:
+                await message.reply("✅ Talebiniz alınmıştır.")
+            except TelegramAPIError:
+                logger.exception("REQUEST_ACK_FAILED group=%s msg=%s", message.chat.id, message.message_id)
             return
 
         if route is None or not route.enabled:
